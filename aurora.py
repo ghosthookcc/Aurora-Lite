@@ -681,7 +681,7 @@ def _gui_main(args, files):
             uploadedImages, uploadedVideos, uploadedLeftover = self.workspace.import_uploads()
             removed = self.workspace.clean_trash()
             if uploadedImages == 0 and uploadedImages == 0 and uploadedLeftover == 0:
-                lines = ["Nothing new in upload/ to import."]
+                lines = ["Nothing new in .upload/ to import."]
             else:
                 lines = [f"Imported {uploadedImages + uploadedVideos} wallpaper(s): "
                          f"{uploadedImages} image(s), {uploadedVideos} video(s).",
@@ -701,7 +701,7 @@ def _gui_main(args, files):
             if self.workspace is None or not folders:
                 return
             copied, prefixed = self.workspace.copy_into_upload(folders)
-            lines = [f"Copied {copied} folder(s) into upload/."]
+            lines = [f"Copied {copied} folder(s) into .upload/."]
             if prefixed:
                 lines.append(f"Renamed {prefixed} file(s) with the "
                              f"wallpaper- prefix.")
