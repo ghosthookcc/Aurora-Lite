@@ -149,7 +149,7 @@ class Workspace:
             source = os.path.join(folder, fileName)
             if not os.path.isfile(source):
                 continue
-            if fn.lower().startswith(WALLPAPER_PREFIX):
+            if fileName.lower().startswith(WALLPAPER_PREFIX):
                 continue
             extension = os.path.splitext(fileName)[1].lower()
             if extension not in IMAGE_EXTS and extension not in VIDEO_EXTS:
