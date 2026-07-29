@@ -87,7 +87,7 @@ cd ~
 Clone the project:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/aurora-lite.git
+git clone https://github.com/ghosthookcc/aurora-lite.git
 ```
 
 Enter the project directory:
