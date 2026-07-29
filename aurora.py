@@ -12,14 +12,14 @@ screen for a menu:
 The menu header shows the screen's connector name (HDMI-1, DP-2) so you know which display you're acting on.
 
 Usage:
-    ./wallman.py                       # daemonize; default image on every screen
-    ./wallman.py FILE0 FILE1 [...]     # one file per monitor, in order
-    ./wallman.py --mode fit clip.mp4   # fill|fit|stretch  (default: fill)
-    ./wallman.py --audio clip.mp4      # start videos unmuted
-    ./wallman.py --foreground ...      # don't background
-    ./wallman.py --stop                # stop the running background instance
-    ./wallman.py --install-autostart   # run on login (no files -> default image)
-    ./wallman.py --remove-autostart
+    ./aurora.py                       # daemonize; default image on every screen
+    ./aurora.py FILE0 FILE1 [...]     # one file per monitor, in order
+    ./aurora.py --mode fit clip.mp4   # fill|fit|stretch  (default: fill)
+    ./aurora.py --audio clip.mp4      # start videos unmuted
+    ./aurora.py --foreground ...      # don't background the process
+    ./aurora.py --stop                # stop the running background instance
+    ./aurora.py --install-autostart   # run on login (no files -> default image)
+    ./aurora.py --remove-autostart
 
 Ship wallpaper-default.jpg next to this script; the following directories are created on run if they do not exist:
     1. workspace/
@@ -27,7 +27,7 @@ Ship wallpaper-default.jpg next to this script; the following directories are cr
     3. images/
     4. videos/
     5. .trash/
-Logs go to .wallman.log.
+Logs go to .aurora.log.
 """
 
 import argparse
@@ -550,7 +550,7 @@ def _gui_main(args, files):
         def _build_pipeline(self):
             self.pipeline = Gst.ElementFactory.make("playbin", None)
             if not self.pipeline:
-                sys.exit("wallman: 'playbin' missing (install gstreamer1.0-plugins-base)")
+                sys.exit("aurora: 'playbin' missing (install gstreamer1.0-plugins-base)")
             self.pipeline.set_property("uri", Gst.filename_to_uri(self.path))
 
             sink = Gst.ElementFactory.make("glimagesink", None)
@@ -671,7 +671,7 @@ def _gui_main(args, files):
             dlg = Gtk.MessageDialog(
                 transient_for=parent, modal=True,
                 message_type=Gtk.MessageType.INFO,
-                buttons=Gtk.ButtonsType.OK, text="wallman")
+                buttons=Gtk.ButtonsType.OK, text="aurora")
             dlg.format_secondary_text("\n".join(lines))
             dlg.run()
             dlg.destroy()
@@ -875,7 +875,7 @@ def main():
     if args.remove_autostart:
         removed = remove_autostart()
         print(f"aurora: autostart removed ({removed})" if removed
-              else "wallman: no autostart entry to remove")
+              else "aurora: no autostart entry to remove")
         return
     if args.install_autostart:
         destination = install_autostart(args.files, args.mode, args.audio)
