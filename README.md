@@ -100,7 +100,7 @@ Your folder should contain:
 
 ```
 aurora-lite/
-├── wallman.py
+├── aurora.py
 ├── wallpaper-default.jpg
 └── README.md
 ```
@@ -114,13 +114,13 @@ aurora-lite/
 Make the script executable:
 
 ```bash
-chmod +x wallman.py
+chmod +x aurora.py
 ```
 
 Start Aurora Lite:
 
 ```bash
-./wallman.py --foreground
+./aurora.py --foreground
 ```
 
 The default wallpaper will now appear on all connected monitors.
@@ -128,7 +128,7 @@ The default wallpaper will now appear on all connected monitors.
 To run Aurora Lite in the background:
 
 ```bash
-./wallman.py
+./aurora.py
 ```
 
 Logs are written to:
@@ -144,7 +144,7 @@ Logs are written to:
 ## Start with default wallpaper
 
 ```bash
-./wallman.py
+./aurora.py
 ```
 
 ---
@@ -154,7 +154,7 @@ Logs are written to:
 One file per monitor:
 
 ```bash
-./wallman.py wallpaper1.jpg wallpaper2.mp4
+./aurora.py wallpaper1.jpg wallpaper2.mp4
 ```
 
 Example:
@@ -175,7 +175,7 @@ By default videos are muted.
 Enable audio:
 
 ```bash
-./wallman.py --audio video.mp4
+./aurora.py --audio video.mp4
 ```
 
 ---
@@ -187,7 +187,7 @@ Enable audio:
 Crops the wallpaper to fill the screen:
 
 ```bash
-./wallman.py --mode fill wallpaper.mp4
+./aurora.py --mode fill wallpaper.mp4
 ```
 
 ### Fit
@@ -195,7 +195,7 @@ Crops the wallpaper to fill the screen:
 Keeps aspect ratio and adds borders:
 
 ```bash
-./wallman.py --mode fit wallpaper.mp4
+./aurora.py --mode fit wallpaper.mp4
 ```
 
 ### Stretch
@@ -203,7 +203,7 @@ Keeps aspect ratio and adds borders:
 Stretches wallpaper to screen size:
 
 ```bash
-./wallman.py --mode stretch wallpaper.mp4
+./aurora.py --mode stretch wallpaper.mp4
 ```
 
 ---
@@ -213,13 +213,13 @@ Stretches wallpaper to screen size:
 Enable Aurora Lite on login:
 
 ```bash
-./wallman.py --install-autostart
+./aurora.py --install-autostart
 ```
 
 Remove autostart:
 
 ```bash
-./wallman.py --remove-autostart
+./aurora.py --remove-autostart
 ```
 
 ---
@@ -229,7 +229,7 @@ Remove autostart:
 Stop the background instance:
 
 ```bash
-./wallman.py --stop
+./aurora.py --stop
 ```
 
 ---
@@ -345,7 +345,7 @@ Display: DP-2
 ```
 aurora-lite/
 │
-├── wallman.py              # Main application
+├── aurora.py              # Main application
 ├── wallpaper-default.jpg   # Default wallpaper
 ├── README.md
 │
