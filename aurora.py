@@ -862,6 +862,8 @@ def main():
     argumentParser.add_argument("--audio", action="store_true", help="start videos unmuted")
     argumentParser.add_argument("--stop", action="store_true",
                                 help="stop the running background instance, then exit")
+    argumentParser.add_argument("--restart", action="store_true",
+                                help="stop the running instance and start a fresh one")
     argumentParser.add_argument("--install-autostart", action="store_true",
                                 help="write ~/.config/autostart entry, then exit")
     argumentParser.add_argument("--remove-autostart", action="store_true",
@@ -873,6 +875,14 @@ def main():
     if args.stop:
         stop_daemon()
         return
+    if args.restart:
+        stop_daemon()
+        pid = read_pid()
+        if pid is not None and not pid_alive(pid):
+            try:
+                os.remove(pid_file())
+            except OSError:
+                pass
     if args.remove_autostart:
         removed = remove_autostart()
         print(f"aurora: autostart removed ({removed})" if removed
