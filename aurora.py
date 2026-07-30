@@ -42,7 +42,6 @@ import sys
 import time
 import warnings
 
-
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff"}
 VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"}
 
@@ -161,6 +160,7 @@ class Workspace:
 
     def import_uploads(self):
         """Returns (images_moved, videos_moved, items_trashed)."""
+        self.prefix_wallpapers(self.upload)
         moved_img = moved_vid = 0
         for dirpath, _dirs, files in os.walk(self.upload):
             for fileName in files:
