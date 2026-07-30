@@ -86,7 +86,7 @@ def connector_for(connectors, localSpace, idx):
     for (name, x, y, width, height) in connectors:
         if x == localSpace.x and y == localSpace.y:
             return name
-    if idx < len(conns):
+    if idx < len(connectors):
         return connectors[idx][0]
     return f"screen-{idx}"
 
@@ -559,7 +559,6 @@ def _gui_main(args, files):
                 self.pipeline.set_property("video-sink", sink)
 
             self.pipeline.set_property("mute", self._muted)
-            self.pipeline.connect("about-to-finish", self._on_about_to_finish)
 
             bus = self.pipeline.get_bus()
             bus.add_signal_watch()
@@ -567,9 +566,6 @@ def _gui_main(args, files):
             bus.connect("sync-message::element", self._on_sync_message)
             bus.connect("message::eos", self._on_eos)
             bus.connect("message::error", self._on_error)
-
-        def _on_about_to_finish(self, playbin):
-            playbin.set_property("uri", Gst.filename_to_uri(self.path))
 
         def _on_sync_message(self, _bus, msg):
             structure = msg.get_structure()
@@ -584,7 +580,7 @@ def _gui_main(args, files):
 
         def _on_eos(self, _bus, _msg):
             self.pipeline.seek_simple(Gst.Format.TIME,
-                                      Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, 
+                                      Gst.SeekFlags.FLUSH, 
                                       0)
 
         def _on_error(self, _bus, msg):
@@ -680,7 +676,7 @@ def _gui_main(args, files):
             """Run the upload sort + trash cleanup; return summary lines."""
             uploadedImages, uploadedVideos, uploadedLeftover = self.workspace.import_uploads()
             removed = self.workspace.clean_trash()
-            if uploadedImages == 0 and uploadedImages == 0 and uploadedLeftover == 0:
+            if uploadedImages == 0 and uploadedVideos == 0 and uploadedLeftover == 0:
                 lines = ["Nothing new in .upload/ to import."]
             else:
                 lines = [f"Imported {uploadedImages + uploadedVideos} wallpaper(s): "
@@ -805,6 +801,11 @@ def _gui_main(args, files):
 
     Gst.init(None)
 
+    for name in ("nvh264dec", "nvh264sldec"):
+        factory = Gst.ElementFactory.find(name)
+        if factory:
+            factory.set_rank(Gst.Rank.PRIMARY + 1)
+
     workspace = Workspace(WORKSPACE_DIR)
     workspace.clean_trash()
 
@@ -827,7 +828,7 @@ def _gui_main(args, files):
         connector = connector_for(connectors, geometry, idx)
         monitorRectangles.append((connector, geometry.x, geometry.y, geometry.width, geometry.height))
         if cli:
-            path = cli[i] if i < len(cli) else cli[-1]
+            path = cli[idx] if idx < len(cli) else cli[-1]
             state[connector] = path
         else:
             path = state.get(connector)
