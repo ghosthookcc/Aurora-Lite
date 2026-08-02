@@ -42,7 +42,7 @@ import sys
 import time
 import warnings
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".gif"}
 VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"}
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -61,6 +61,7 @@ def is_video(path):
 
 def monitor_connectors():
     """Parse `xrandr --listmonitors` into [(name, x, y, w, h), ...]."""
+
     try:
         out = subprocess.run(["xrandr", "--listmonitors"],
                              capture_output=True, text=True, timeout=3).stdout
@@ -127,6 +128,7 @@ class Workspace:
     def copy_into_upload(self, folders):
         """Copy each source folder into .upload/, then prefix its top-level
         image/video files with "wallpaper-". Returns (copied, prefixed)."""
+
         copied = prefixed = 0
         for source in folders:
             if not os.path.isdir(source):
@@ -143,6 +145,7 @@ class Workspace:
     def prefix_wallpapers(self, folder):
         """Rename top-level image/video files in uploaded folder(s) to start with the
         "wallpaper-" prefix, skipping ones already prefixed. Returns count of prefixed files."""
+
         renamed = 0
         for fileName in os.listdir(folder):
             source = os.path.join(folder, fileName)
@@ -160,6 +163,7 @@ class Workspace:
 
     def import_uploads(self):
         """Returns (images_moved, videos_moved, items_trashed)."""
+
         self.prefix_wallpapers(self.upload)
         moved_img = moved_vid = 0
         for dirpath, _dirs, files in os.walk(self.upload):
@@ -248,6 +252,7 @@ def remove_autostart():
 
 def load_state():
     """Return {connector: path} of the last wallpaper chosen per screen."""
+
     try:
         with open(STATE_FILE) as file:
             data = json.load(file)
@@ -259,6 +264,7 @@ def load_state():
 
 def save_state(state):
     """Persist {connector: path} atomically (temp file + rename)."""
+
     try:
         tmp = STATE_FILE + ".tmp"
         with open(tmp, "w") as f:
@@ -322,6 +328,7 @@ def stop_daemon():
 
 def daemonize(log_path):
     """Double-fork into the background; send stdout/stderr to a log file."""
+
     if os.fork() > 0:
         os._exit(0)
     os.setsid()
@@ -488,14 +495,59 @@ def _gui_main(args, files):
             pass
 
     class ImageWallpaper(_DesktopWindow):
-        def __init__(self, geometry, pixelBuffer, mode="fill"):
+        def __init__(self, geometry, path, mode="fill"):
             super().__init__(geometry)
-            self.pixelBuffer = pixelBuffer
             self.mode = mode
+            self.pixelBuffer = None
+            self._anim_iter = None
+            self._anim_timer = 0
+
+            self._load(path)
+
             self.area = Gtk.DrawingArea()
             self.area.connect("draw", self._on_draw)
             self.add(self.area)
             self._attach_input(self.area)
+
+        def _load(self, path):
+            """Load as an animation. Single-frame files paint once (0% idle);
+            multi-frame files (animated gif/webp) drive a frame timer."""
+
+            try:
+                anim = GdkPixbuf.PixbufAnimation.new_from_file(path)
+            except GLib.Error as e:
+                print(f"aurora: cannot load '{path}': {e.message}", file=sys.stderr)
+                if path != DEFAULT_IMAGE:
+                    self._load(DEFAULT_IMAGE)
+                return
+            if anim.is_static_image():
+                self.pixelBuffer = anim.get_static_image()
+                return
+
+            self._anim_iter = anim.get_iter(None)
+            self.pixelBuffer = self._anim_iter.get_pixbuf()
+            self._schedule_next_frame()
+
+        def _schedule_next_frame(self):
+            delay = self._anim_iter.get_delay_time()
+            if delay < 0:
+                delay = 100
+            delay = max(delay, 20)
+            self._anim_timer = GLib.timeout_add(delay, self._advance_frame)
+
+        def _advance_frame(self):
+            self._anim_timer = 0
+            self._anim_iter.advance(None)
+            self.pixelBuffer = self._anim_iter.get_pixbuf()
+            if self.get_realized():
+                self.area.queue_draw()
+            self._schedule_next_frame()
+            return False
+
+        def stop(self):
+            if self._anim_timer:
+                GLib.source_remove(self._anim_timer)
+                self._anim_timer = 0
 
         def _on_draw(self, widget, context):
             alloc = widget.get_allocation()
@@ -634,14 +686,6 @@ def _gui_main(args, files):
             self.pipeline.set_property("mute", muted)
 
 
-    def load_pixbuf(path):
-        try:
-            return GdkPixbuf.Pixbuf.new_from_file(path)
-        except GLib.Error as e:
-            print(f"aurora: cannot load '{path}': {e.message}", file=sys.stderr)
-            return None
-
-
     class Manager:
         """Owns the set of windows; can swap one screen's wallpaper live."""
 
@@ -674,6 +718,7 @@ def _gui_main(args, files):
 
         def _sort_and_lines(self):
             """Run the upload sort + trash cleanup; return summary lines."""
+
             uploadedImages, uploadedVideos, uploadedLeftover = self.workspace.import_uploads()
             removed = self.workspace.clean_trash()
             if uploadedImages == 0 and uploadedVideos == 0 and uploadedLeftover == 0:
@@ -710,10 +755,7 @@ def _gui_main(args, files):
             if is_video(path):
                 window = VideoWallpaper(geo, path, self.mode, self.audio)
             else:
-                pixelBuffer = load_pixbuf(path)
-                if pixelBuffer is None and path != DEFAULT_IMAGE:
-                    pixelBuffer = load_pixbuf(DEFAULT_IMAGE)
-                window = ImageWallpaper(geo, pixelBuffer, self.mode)
+                window = ImageWallpaper(geo, path, self.mode)
             window.connector = connector
             window.manager = self
             return window
@@ -801,7 +843,7 @@ def _gui_main(args, files):
 
     Gst.init(None)
 
-    for name in ("nvh264dec", "nvh264sldec"):
+    for name in ("nvh264dec", "nvh264sldec", "nvvp9dec", "nvav1dec"):
         factory = Gst.ElementFactory.find(name)
         if factory:
             factory.set_rank(Gst.Rank.PRIMARY + 1)
