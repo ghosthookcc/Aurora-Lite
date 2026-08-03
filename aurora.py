@@ -59,9 +59,32 @@ _logfile = None
 def is_video(path):
     return os.path.splitext(path)[1].lower() in VIDEO_EXTS
 
+def detect_wm():
+    """Best-effort window-manager id: 'i3', 'cinnamon', or whatever
+    _NET_WM_NAME reports (lowercased). Used to adapt behaviour per WM."""
+    for var in ("XDG_CURRENT_DESKTOP", "DESKTOP_SESSION", "XDG_SESSION_DESKTOP"):
+        value = os.environ.get(var, "").lower()
+        if "i3" in value:
+            return "i3"
+        if "cinnamon" in value:
+            return "cinnamon"
+    # Ask the WM itself (works when env vars are unset, e.g. bare startx).
+    try:
+        out = subprocess.run(["xprop", "-root", "_NET_SUPPORTING_WM_CHECK"],
+                             capture_output=True, text=True, timeout=3).stdout
+        match = re.search(r"0x[0-9a-fA-F]+", out)
+        if match:
+            out = subprocess.run(["xprop", "-id", match.group(0), "_NET_WM_NAME"],
+                                 capture_output=True, text=True, timeout=3).stdout
+            name = out.split("=", 1)[-1].strip().strip('"').lower()
+            if name:
+                return name
+    except Exception:
+        pass
+    return "unknown"
+
 def monitor_connectors():
     """Parse `xrandr --listmonitors` into [(name, x, y, w, h), ...]."""
-
     try:
         out = subprocess.run(["xrandr", "--listmonitors"],
                              capture_output=True, text=True, timeout=3).stdout
@@ -128,7 +151,6 @@ class Workspace:
     def copy_into_upload(self, folders):
         """Copy each source folder into .upload/, then prefix its top-level
         image/video files with "wallpaper-". Returns (copied, prefixed)."""
-
         copied = prefixed = 0
         for source in folders:
             if not os.path.isdir(source):
@@ -145,7 +167,6 @@ class Workspace:
     def prefix_wallpapers(self, folder):
         """Rename top-level image/video files in uploaded folder(s) to start with the
         "wallpaper-" prefix, skipping ones already prefixed. Returns count of prefixed files."""
-
         renamed = 0
         for fileName in os.listdir(folder):
             source = os.path.join(folder, fileName)
@@ -163,7 +184,6 @@ class Workspace:
 
     def import_uploads(self):
         """Returns (images_moved, videos_moved, items_trashed)."""
-
         self.prefix_wallpapers(self.upload)
         moved_img = moved_vid = 0
         for dirpath, _dirs, files in os.walk(self.upload):
@@ -252,7 +272,6 @@ def remove_autostart():
 
 def load_state():
     """Return {connector: path} of the last wallpaper chosen per screen."""
-
     try:
         with open(STATE_FILE) as file:
             data = json.load(file)
@@ -264,7 +283,6 @@ def load_state():
 
 def save_state(state):
     """Persist {connector: path} atomically (temp file + rename)."""
-
     try:
         tmp = STATE_FILE + ".tmp"
         with open(tmp, "w") as f:
@@ -328,7 +346,6 @@ def stop_daemon():
 
 def daemonize(log_path):
     """Double-fork into the background; send stdout/stderr to a log file."""
-
     if os.fork() > 0:
         os._exit(0)
     os.setsid()
@@ -396,11 +413,21 @@ def _gui_main(args, files):
             self.connect("map", lambda w: self.move(geometry.x, geometry.y))
 
         def _on_realize(self, _w):
+            gdkwin = self.get_window()
+            if TILING_WM:
+                try:
+                    gdkwin.set_override_redirect(True)
+                except Exception as e:
+                    print(f"aurora: could not set override-redirect: {e}",
+                          file=sys.stderr)
             GLib.timeout_add(50, self._reposition)
-
         def _reposition(self):
             self.move(self.geometry.x, self.geometry.y)
             self.resize(self.geometry.width, self.geometry.height)
+            if TILING_WM:
+                gdkwin = self.get_window()
+                if gdkwin is not None:
+                    gdkwin.lower()
             return False
 
         def _attach_input(self, widget):
@@ -499,8 +526,8 @@ def _gui_main(args, files):
             super().__init__(geometry)
             self.mode = mode
             self.pixelBuffer = None
-            self._anim_iter = None
-            self._anim_timer = 0
+            self._anim_iter = None      # GdkPixbufAnimationIter when animated
+            self._anim_timer = 0        # GLib timeout id (0 = none)
 
             self._load(path)
 
@@ -512,7 +539,6 @@ def _gui_main(args, files):
         def _load(self, path):
             """Load as an animation. Single-frame files paint once (0% idle);
             multi-frame files (animated gif/webp) drive a frame timer."""
-
             try:
                 anim = GdkPixbuf.PixbufAnimation.new_from_file(path)
             except GLib.Error as e:
@@ -523,26 +549,26 @@ def _gui_main(args, files):
             if anim.is_static_image():
                 self.pixelBuffer = anim.get_static_image()
                 return
-
+            # Animated: iterate frames on their own delays.
             self._anim_iter = anim.get_iter(None)
             self.pixelBuffer = self._anim_iter.get_pixbuf()
             self._schedule_next_frame()
 
         def _schedule_next_frame(self):
-            delay = self._anim_iter.get_delay_time()
+            delay = self._anim_iter.get_delay_time()  # ms, -1 if unknown
             if delay < 0:
                 delay = 100
-            delay = max(delay, 20)
+            delay = max(delay, 20)  # avoid busy-looping on 0-delay frames
             self._anim_timer = GLib.timeout_add(delay, self._advance_frame)
 
         def _advance_frame(self):
             self._anim_timer = 0
-            self._anim_iter.advance(None)
+            self._anim_iter.advance(None)             # advance to current wall-clock frame
             self.pixelBuffer = self._anim_iter.get_pixbuf()
             if self.get_realized():
                 self.area.queue_draw()
             self._schedule_next_frame()
-            return False
+            return False  # one-shot; _schedule_next_frame arms the next
 
         def stop(self):
             if self._anim_timer:
@@ -718,7 +744,6 @@ def _gui_main(args, files):
 
         def _sort_and_lines(self):
             """Run the upload sort + trash cleanup; return summary lines."""
-
             uploadedImages, uploadedVideos, uploadedLeftover = self.workspace.import_uploads()
             removed = self.workspace.clean_trash()
             if uploadedImages == 0 and uploadedVideos == 0 and uploadedLeftover == 0:
@@ -794,11 +819,17 @@ def _gui_main(args, files):
         Event-driven: recomputes only when a window's state changes, a window
         opens/closes, focus moves, or the workspace switches - never on a
         timer, so idle cost is essentially nil.
+
+        On tiling WMs (i3) "maximized" is meaningless - every tiled window
+        fills its container - so only true fullscreen counts there.
         """
 
-        def __init__(self, manager, monitors):
+        TILING_WMS = ("i3", "sway", "bspwm", "awesome", "dwm", "xmonad", "herbstluftwm")
+
+        def __init__(self, manager, monitors, wm="unknown"):
             self.manager = manager
             self.monitors = monitors
+            self.tiling = any(t in wm for t in self.TILING_WMS)
 
             self.screen = Wnck.Screen.get_default()
             self.screen.force_update()
@@ -831,7 +862,12 @@ def _gui_main(args, files):
                 if (activeWorkspace is not None and not window.is_pinned()
                         and not window.is_on_workspace(activeWorkspace)):
                     continue
-                if not (window.is_maximized() or window.is_fullscreen()):
+                if self.tiling:
+                    # Tiling WM: every window "fills" its container, so only
+                    # true fullscreen means the wallpaper is actually hidden.
+                    if not window.is_fullscreen():
+                        continue
+                elif not (window.is_maximized() or window.is_fullscreen()):
                     continue
                 x, y, windowWidth, windowHeight = window.get_geometry()
                 generalX, generalY = x + windowWidth // 2, y + windowHeight // 2
@@ -850,6 +886,11 @@ def _gui_main(args, files):
 
     workspace = Workspace(WORKSPACE_DIR)
     workspace.clean_trash()
+
+    wm = detect_wm()
+    print(f"aurora: window manager detected: {wm}", file=sys.stderr)
+
+    TILING_WM = any(t in wm for t in ("i3", "sway", "bspwm", "awesome", "dwm", "xmonad", "herbstluftwm"))
 
     display = Gdk.Display.get_default()
     if display is None:
@@ -883,7 +924,7 @@ def _gui_main(args, files):
 
     watcher = None
     if Wnck is not None:
-        watcher = CoverageWatcher(manager, monitorRectangles) # noqa: F841
+        watcher = CoverageWatcher(manager, monitorRectangles, wm)  # noqa: F841
 
     def start_all():
         for window in manager.windows:
