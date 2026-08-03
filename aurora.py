@@ -522,12 +522,13 @@ def _gui_main(args, files):
             pass
 
     class ImageWallpaper(_DesktopWindow):
-        def __init__(self, geometry, path, mode="fill"):
+        def __init__(self, geometry, path, mode="fill", dim=0.0):
             super().__init__(geometry)
             self.mode = mode
+            self.dim = dim
             self.pixelBuffer = None
-            self._anim_iter = None      # GdkPixbufAnimationIter when animated
-            self._anim_timer = 0        # GLib timeout id (0 = none)
+            self._anim_iter = None
+            self._anim_timer = 0
 
             self._load(path)
 
@@ -590,6 +591,10 @@ def _gui_main(args, files):
             if self.pixelBuffer is None:
                 context.set_source_rgb(0, 0, 0)
                 context.paint()
+                if self.dim > 0:
+                    context.identity_matrix()
+                    context.set_source_rgba(0, 0, 0, self.dim)
+                    context.paint()
                 return False
             pixelBufferWidth, pixelBufferHeight = self.pixelBuffer.get_width(), self.pixelBuffer.get_height()
             if pixelBufferWidth == 0 or pixelBufferHeight == 0:
@@ -612,10 +617,12 @@ def _gui_main(args, files):
             return False
 
     class VideoWallpaper(_DesktopWindow):
-        def __init__(self, geometry, path, mode="fill", audio=False):
+        def __init__(self, geometry, path, mode="fill", audio=False, dim=0.0):
             super().__init__(geometry)
             self.path = path
             self.mode = mode
+            self.dim = dim
+
             self._xid = None
             self._manual_paused = False 
             self._covered = False 
@@ -646,6 +653,14 @@ def _gui_main(args, files):
                 self.pipeline.set_property("video-sink", sink)
 
             self.pipeline.set_property("mute", self._muted)
+
+            if self.dim > 0:
+                try:
+                    brightness = -min(max(self.dim, 0.0), 1.0)
+                    flt = Gst.parse_bin_from_description(f"glupload ! glcolorbalance brightness={brightness:.2f}", True)
+                    self.pipeline.set_property("video-filter", flt)
+                except Exception as e:
+                    print(f"aurora: dim filter unavailable: {e}", file=sys.stderr)
 
             bus = self.pipeline.get_bus()
             bus.add_signal_watch()
@@ -724,11 +739,12 @@ def _gui_main(args, files):
     class Manager:
         """Owns the set of windows; can swap one screen's wallpaper live."""
 
-        def __init__(self, mode, audio, workspace=None, state=None):
+        def __init__(self, mode, audio, workspace=None, state=None, dim=0.0):
             self.mode = mode
             self.audio = audio
             self.workspace = workspace
             self.state = state if state is not None else {}
+            self.dim = min(max(dim, 0.0), 1.0)
             self.windows = []
             self._covered_set = None
 
@@ -787,9 +803,9 @@ def _gui_main(args, files):
             if not path or not os.path.exists(path):
                 path = DEFAULT_IMAGE
             if is_video(path):
-                window = VideoWallpaper(geo, path, self.mode, self.audio)
+                window = VideoWallpaper(geo, path, self.mode, self.audio, self.dim)
             else:
-                window = ImageWallpaper(geo, path, self.mode)
+                window = ImageWallpaper(geo, path, self.mode, self.dim)
             window.connector = connector
             window.manager = self
             return window
@@ -906,7 +922,7 @@ def _gui_main(args, files):
     connectors = monitor_connectors()
 
     state = load_state()
-    manager = Manager(args.mode, args.audio, workspace, state)
+    manager = Manager(args.mode, args.audio, workspace, state, args.dim)
 
     def on_sigterm(*_):
         manager.quit()
@@ -960,6 +976,8 @@ def main():
                                 help="remove the autostart entry, then exit")
     argumentParser.add_argument("--foreground", action="store_true",
                                 help="run in the foreground instead of daemonizing")
+    argumentParser.add_argument("--dim", type=float, default=0.0,
+                                help="darken wallpapers 0.0-1.0 for readability (e.g. 0.35)")
     args = argumentParser.parse_args()
 
     if args.stop:
