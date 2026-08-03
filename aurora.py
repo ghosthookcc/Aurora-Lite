@@ -35,6 +35,7 @@ import atexit
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -237,7 +238,67 @@ def autostart_path():
     return os.path.join(
         os.path.expanduser("~/.config/autostart"), "aurora.desktop")
 
-def install_autostart(files, mode, audio):
+_AUTOSTART_BEGIN = "# >>> aurora-lite autostart >>>"
+_AUTOSTART_END = "# <<< aurora-lite autostart <<<"
+
+def _autostart_command(files, mode, audio, dim):
+    """Shell command that launches aurora with the given options."""
+    script = os.path.abspath(__file__)
+    python = sys.executable or "/usr/bin/python3"
+    parts = [python, script]
+    if mode and mode != "fill":
+        parts += ["--mode", mode]
+    if audio:
+        parts += ["--audio"]
+    if dim and dim > 0:
+        parts += ["--dim", str(dim)]
+    parts += [os.path.abspath(f) for f in files]
+    return " ".join(shlex.quote(p) for p in parts)
+
+def _tiling_config_path(wm):
+    """Config file to edit for a tiling WM, or None if unknown format."""
+    if "sway" in wm:
+        candidates = ["~/.config/sway/config"]
+    elif "i3" in wm:
+        candidates = ["~/.config/i3/config", "~/.i3/config"]
+    else:
+        return None
+    for p in candidates:
+        expanded = os.path.expanduser(p)
+        if os.path.exists(expanded):
+            return expanded
+    return os.path.expanduser(candidates[0])
+
+def _strip_autostart_block(text):
+    """Remove any existing aurora-managed exec block from config text."""
+    out, skipping = [], False
+    for line in text.splitlines():
+        if line.strip() == _AUTOSTART_BEGIN:
+            skipping = True
+            continue
+        if line.strip() == _AUTOSTART_END:
+            skipping = False
+            continue
+        if not skipping:
+            out.append(line)
+    return "\n".join(out)
+
+def _install_into_config(config_path, cmd):
+    """Idempotently write the aurora exec block into an i3/sway config."""
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    try:
+        text = open(config_path).read() if os.path.exists(config_path) else ""
+    except OSError:
+        text = ""
+    text = _strip_autostart_block(text).rstrip("\n")
+    block = (f"\n\n{_AUTOSTART_BEGIN}\n"
+             f"exec --no-startup-id {cmd}\n"
+             f"{_AUTOSTART_END}\n")
+    with open(config_path, "w") as f:
+        f.write(text + block)
+    return config_path
+
+def _install_xdg(files, mode, audio, dim):
     script = os.path.abspath(__file__)
     python = sys.executable or "/usr/bin/python3"
     argv = [python, script]
@@ -245,7 +306,8 @@ def install_autostart(files, mode, audio):
         argv += ["--mode", mode]
     if audio:
         argv += ["--audio"]
-    
+    if dim and dim > 0:
+        argv += ["--dim", str(dim)]
     argv += [os.path.abspath(file) for file in files]
     exec_line = " ".join(f'"{arg}"' if " " in arg else arg for arg in argv)
 
@@ -263,26 +325,69 @@ def install_autostart(files, mode, audio):
             "NoDisplay=true\n")
     return destination
 
+def install_autostart(files, mode, audio, dim=0.0):
+    """Install login autostart, adapting to the detected window manager."""
+    wm = detect_wm()
+    config = _tiling_config_path(wm)
+    if config is not None:
+        return _install_into_config(config, _autostart_command(files, mode, audio, dim))
+    if any(t in wm for t in ("bspwm", "awesome", "dwm", "xmonad", "herbstluftwm")):
+        cmd = _autostart_command(files, mode, audio, dim)
+        print(f"aurora: {wm}: can't auto-edit that WM's config. Add this to "
+              f"your startup manually:\n  {cmd}", file=sys.stderr)
+        return None
+    return _install_xdg(files, mode, audio, dim)
+
 def remove_autostart():
-    destination = autostart_path()
-    if os.path.exists(destination):
-        os.remove(destination)
-        return destination
-    return None
+    """Remove aurora autostart from XDG and any i3/sway config."""
+    removed = []
+    dest = autostart_path()
+    if os.path.exists(dest):
+        try:
+            os.remove(dest)
+            removed.append(dest)
+        except OSError:
+            pass
+    for p in ("~/.config/i3/config", "~/.i3/config", "~/.config/sway/config"):
+        expanded = os.path.expanduser(p)
+        if not os.path.exists(expanded):
+            continue
+        try:
+            text = open(expanded).read()
+            stripped = _strip_autostart_block(text)
+            if stripped != text:
+                with open(expanded, "w") as f:
+                    f.write(stripped.rstrip("\n") + "\n")
+                removed.append(expanded)
+        except OSError:
+            pass
+    return removed or None
 
 def load_state():
-    """Return {connector: path} of the last wallpaper chosen per screen."""
+    """Return {connector: {"path": str, "dim": float}} per screen.
+    Migrates the old {connector: path_string} format transparently."""
     try:
         with open(STATE_FILE) as file:
             data = json.load(file)
-        if isinstance(data, dict):
-            return {str(key): str(value) for key, value in data.items()}
     except (OSError, ValueError):
-        pass
-    return {}
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    result = {}
+    for key, value in data.items():
+        if isinstance(value, str):
+            result[str(key)] = {"path": value, "dim": 0.0}
+        elif isinstance(value, dict) and value.get("path"):
+            try:
+                dim = float(value.get("dim", 0.0))
+            except (TypeError, ValueError):
+                dim = 0.0
+            result[str(key)] = {"path": str(value["path"]),
+                                "dim": min(max(dim, 0.0), 1.0)}
+    return result
 
 def save_state(state):
-    """Persist {connector: path} atomically (temp file + rename)."""
+    """Persist {connector: {path, dim}} atomically (temp file + rename)."""
     try:
         tmp = STATE_FILE + ".tmp"
         with open(tmp, "w") as f:
@@ -462,6 +567,11 @@ def _gui_main(args, files):
             refresh = Gtk.MenuItem(label="Refresh")
             refresh.connect("activate", lambda *_: self.manager.refresh(self))
             menu.append(refresh)
+
+            dim_item = Gtk.MenuItem(label="Dim\u2026")
+            dim_item.connect("activate", self._open_dim_dialog)
+            menu.append(dim_item)
+
             menu.append(Gtk.SeparatorMenuItem())
 
             quit_item = Gtk.MenuItem(label="Quit aurora")
@@ -470,6 +580,41 @@ def _gui_main(args, files):
 
             menu.show_all()
             menu.popup_at_pointer(event)
+
+        def _open_dim_dialog(self, _item):
+            win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+            win.set_title("Dim")
+            win.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+            win.set_keep_above(True)
+            win.set_resizable(False)
+            win.set_default_size(280, 70)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
+                          spacing=6, margin=10)
+            box.pack_start(
+                Gtk.Label(label=f"Dim \u2014 {self.connector}"), False, False, 0)
+            scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.0, 1.0, 0.05)
+            scale.set_value(getattr(self, "dim", 0.0))
+            scale.set_draw_value(True)
+            scale.set_value_pos(Gtk.PositionType.RIGHT)
+            scale.connect("value-changed", self._on_dim_changed)
+            box.pack_start(scale, True, True, 0)
+            win.add(box)
+            win.show_all()
+
+        def _on_dim_changed(self, scale):
+            self.set_dim(scale.get_value())
+            if getattr(self, "_dim_save_timer", 0):
+                GLib.source_remove(self._dim_save_timer)
+            self._dim_save_timer = GLib.timeout_add(400, self._save_dim)
+
+        def _save_dim(self):
+            self._dim_save_timer = 0
+            self.manager.remember(self.connector, self.path, self.dim)
+            return False
+
+        def set_dim(self, value):
+            pass
 
         def _populate_menu(self, menu):
             pass
@@ -524,6 +669,7 @@ def _gui_main(args, files):
     class ImageWallpaper(_DesktopWindow):
         def __init__(self, geometry, path, mode="fill", dim=0.0):
             super().__init__(geometry)
+            self.path = path
             self.mode = mode
             self.dim = dim
             self.pixelBuffer = None
@@ -536,6 +682,11 @@ def _gui_main(args, files):
             self.area.connect("draw", self._on_draw)
             self.add(self.area)
             self._attach_input(self.area)
+
+        def set_dim(self, value):
+            self.dim = min(max(value, 0.0), 1.0)
+            if self.get_realized():
+                self.area.queue_draw()
 
         def _load(self, path):
             """Load as an animation. Single-frame files paint once (0% idle);
@@ -580,14 +731,6 @@ def _gui_main(args, files):
         def _on_draw(self, widget, context):
             alloc = widget.get_allocation()
             width, height = alloc.width, alloc.height
-            if not getattr(self, "_drew_once", False):
-                self._drew_once = True
-                pb = self.pixelBuffer
-                pbinfo = ("None" if pb is None
-                          else f"{pb.get_width()}x{pb.get_height()}")
-                print(f"aurora: draw[{self.connector}] alloc={width}x{height} "
-                      f"geom={self.geometry.width}x{self.geometry.height} "
-                      f"pixbuf={pbinfo} mode={self.mode}", file=sys.stderr)
             if self.pixelBuffer is None:
                 context.set_source_rgb(0, 0, 0)
                 context.paint()
@@ -654,10 +797,15 @@ def _gui_main(args, files):
 
             self.pipeline.set_property("mute", self._muted)
 
+            self._balance = None
             if self.dim > 0:
                 try:
-                    brightness = -min(max(self.dim, 0.0), 1.0)
-                    flt = Gst.parse_bin_from_description(f"glupload ! glcolorbalance brightness={brightness:.2f}", True)
+                    flt = Gst.parse_bin_from_description(
+                        "glupload ! glcolorbalance name=auroradim", True)
+                    self._balance = flt.get_by_name("auroradim")
+                    if self._balance is not None:
+                        self._balance.set_property(
+                            "brightness", -min(max(self.dim, 0.0), 1.0))
                     self.pipeline.set_property("video-filter", flt)
                 except Exception as e:
                     print(f"aurora: dim filter unavailable: {e}", file=sys.stderr)
@@ -732,6 +880,11 @@ def _gui_main(args, files):
         def play(self):
             self.pipeline.set_state(Gst.State.PLAYING)
 
+        def set_dim(self, value):
+            self.dim = min(max(value, 0.0), 1.0)
+            if self._balance is not None:
+                self._balance.set_property("brightness", -self.dim)
+
         def set_muted(self, muted):
             self.pipeline.set_property("mute", muted)
 
@@ -744,9 +897,16 @@ def _gui_main(args, files):
             self.audio = audio
             self.workspace = workspace
             self.state = state if state is not None else {}
-            self.dim = min(max(dim, 0.0), 1.0)
+            self.default_dim = min(max(dim, 0.0), 1.0)
             self.windows = []
             self._covered_set = None
+
+        def remember(self, connector, path, dim):
+            """Persist a screen's wallpaper path + dim together."""
+            if not connector:
+                return
+            self.state[connector] = {"path": path, "dim": round(float(dim), 3)}
+            save_state(self.state)
 
         def set_covered(self, covered):
             """covered: set of connector names currently covered."""
@@ -799,34 +959,33 @@ def _gui_main(args, files):
             lines += self._sort_and_lines()
             self._show_summary(parent, lines)
 
-        def build(self, geo, connector, path):
+        def build(self, geo, connector, path, dim=0.0):
             if not path or not os.path.exists(path):
                 path = DEFAULT_IMAGE
             if is_video(path):
-                window = VideoWallpaper(geo, path, self.mode, self.audio, self.dim)
+                window = VideoWallpaper(geo, path, self.mode, self.audio, dim)
             else:
-                window = ImageWallpaper(geo, path, self.mode, self.dim)
+                window = ImageWallpaper(geo, path, self.mode, dim)
             window.connector = connector
             window.manager = self
             return window
 
         def replace(self, old, path):
             geometry, connector = old.geometry, old.connector
+            dim = getattr(old, "dim", self.default_dim)
             old.stop()
             old.destroy()
             if old in self.windows:
                 self.windows.remove(old)
 
-            new = self.build(geometry, connector, path)
+            new = self.build(geometry, connector, path, dim)
             self.windows.append(new)
             new.show_all()
             if self._covered_set is not None:
                 new.set_covered(connector in self._covered_set)
             GLib.idle_add(self._start_one, new)
 
-            if connector:
-                self.state[connector] = path
-                save_state(self.state)
+            self.remember(connector, path, dim)
 
         @staticmethod
         def _start_one(window):
@@ -933,12 +1092,16 @@ def _gui_main(args, files):
         geometry = display.get_monitor(idx).get_geometry()
         connector = connector_for(connectors, geometry, idx)
         monitorRectangles.append((connector, geometry.x, geometry.y, geometry.width, geometry.height))
+        entry = state.get(connector)
         if cli:
             path = cli[idx] if idx < len(cli) else cli[-1]
-            state[connector] = path
+            dim = entry["dim"] if entry else args.dim
+            state[connector] = {"path": path, "dim": round(float(dim), 3)}
+        elif entry:
+            path, dim = entry["path"], entry["dim"]
         else:
-            path = state.get(connector)
-        window = manager.build(geometry, connector, path)
+            path, dim = None, args.dim
+        window = manager.build(geometry, connector, path, dim)
         window.show_all()
         manager.windows.append(window)
 
@@ -993,12 +1156,17 @@ def main():
                 pass
     if args.remove_autostart:
         removed = remove_autostart()
-        print(f"aurora: autostart removed ({removed})" if removed
-              else "aurora: no autostart entry to remove")
+        if removed:
+            print(f"aurora: autostart removed -> {', '.join(removed)}")
+        else:
+            print("aurora: no autostart entry to remove")
         return
     if args.install_autostart:
-        destination = install_autostart(args.files, args.mode, args.audio)
-        print(f"aurora: autostart installed -> {destination}")
+        result = install_autostart(args.files, args.mode, args.audio, args.dim)
+        if result:
+            print(f"aurora: autostart installed -> {result}")
+        else:
+            print("aurora: see instructions above")
         return
 
     if not os.path.exists(DEFAULT_IMAGE):
