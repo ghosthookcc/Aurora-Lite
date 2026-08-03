@@ -549,26 +549,27 @@ def _gui_main(args, files):
             if anim.is_static_image():
                 self.pixelBuffer = anim.get_static_image()
                 return
-            # Animated: iterate frames on their own delays.
+
             self._anim_iter = anim.get_iter(None)
             self.pixelBuffer = self._anim_iter.get_pixbuf()
             self._schedule_next_frame()
 
         def _schedule_next_frame(self):
-            delay = self._anim_iter.get_delay_time()  # ms, -1 if unknown
+            delay = self._anim_iter.get_delay_time()
             if delay < 0:
                 delay = 100
-            delay = max(delay, 20)  # avoid busy-looping on 0-delay frames
+            delay = max(delay, 20)
             self._anim_timer = GLib.timeout_add(delay, self._advance_frame)
 
         def _advance_frame(self):
             self._anim_timer = 0
-            self._anim_iter.advance(None)             # advance to current wall-clock frame
+            self._anim_iter.advance(None)        
+
             self.pixelBuffer = self._anim_iter.get_pixbuf()
             if self.get_realized():
                 self.area.queue_draw()
             self._schedule_next_frame()
-            return False  # one-shot; _schedule_next_frame arms the next
+            return False
 
         def stop(self):
             if self._anim_timer:
@@ -578,6 +579,14 @@ def _gui_main(args, files):
         def _on_draw(self, widget, context):
             alloc = widget.get_allocation()
             width, height = alloc.width, alloc.height
+            if not getattr(self, "_drew_once", False):
+                self._drew_once = True
+                pb = self.pixelBuffer
+                pbinfo = ("None" if pb is None
+                          else f"{pb.get_width()}x{pb.get_height()}")
+                print(f"aurora: draw[{self.connector}] alloc={width}x{height} "
+                      f"geom={self.geometry.width}x{self.geometry.height} "
+                      f"pixbuf={pbinfo} mode={self.mode}", file=sys.stderr)
             if self.pixelBuffer is None:
                 context.set_source_rgb(0, 0, 0)
                 context.paint()
@@ -863,8 +872,6 @@ def _gui_main(args, files):
                         and not window.is_on_workspace(activeWorkspace)):
                     continue
                 if self.tiling:
-                    # Tiling WM: every window "fills" its container, so only
-                    # true fullscreen means the wallpaper is actually hidden.
                     if not window.is_fullscreen():
                         continue
                 elif not (window.is_maximized() or window.is_fullscreen()):
